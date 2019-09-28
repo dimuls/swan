@@ -1,0 +1,45 @@
+version: "3"
+
+services:
+
+  classifier:
+    build: ../classifier/build/package
+    container_name: classifier
+    image: classifier
+    restart: unless-stopped
+    ports:
+      - "8081:80"
+    environment:
+      CLASSIFIER_FILE_PATH: "/data/classifier"
+      WEB_SERVER_BIND_ADDR: ":80"
+      WEB_SERVER_DEBUG: "1"
+    volumes:
+      - /data
+    stop_grace_period: 5m
+
+  swan-db:
+    image: postgres:12-alpine
+    container_name: swan-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "swan"
+      POSTGRES_PASSWORD: "password"
+      POSTGRES_DB: "swan"
+    volumes:
+      - /var/lib/postgresql/data
+
+  swan:
+    build: build/package
+    container_name: swan
+    image: swan
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    environment:
+      POSTGRES_STORAGE_URI: "postgres://swan:password@swan-db/swan?sslmode=disable"
+      CLASSIFIER_API_URI: "http://classifier"
+      WEB_SERVER_BIND_ADDR: ":80"
+      WEB_SERVER_DEBUG: "1"
+    depends_on:
+      - classifier
+      - swan-db
