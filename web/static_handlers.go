@@ -905,45 +905,7 @@ func (s *Server) getOperator(c echo.Context) error {
 	return c.Redirect(http.StatusFound, "/operator/requests")
 }
 
-// language=html
-const operatorRequestsPage = `<!DOCTYPE html>
-<html>
-<head>
-	<title>ЖКХ Пульс / Оператор / Обращения</title>
-</head>
-<body>
-	<h1>ЖКХ Пульс / Оператор / Обращения</h1>
-	<h2>{{.Login}}</h2>
-	<a href="/logout">Выход</a>
-	<hr/>
-	{{range .Requests}}
-		<p><b>{{.ID}}</b>, <b>Статус: {{.Status}}</b>, Дата и время: {{.CreatedAt.Format "2006-01-02 15:04"}}</p>
-		<p><b>Владелец:</b> Имя: {{.OwnerName}}, Телефон: {{.OwnerPhone}}
-			Адрес: {{.OwnerAddress}}</p>
-		<p>{{.Text}}</p>
-		{{if .HasNewStatus}}
-			<form method="POST" action="/operator/set-request-in-progress">
-				<input type="hidden" name="id" value="{{.ID}}"/>
-				<button type="submit">Начать обработку</button>
-			</form>
-		{{else if .HasInProgressStatus}}
-			<form method="POST" action="/operator/set-request-final">
-				<input type="hidden" name="id" value="{{.ID}}"/>
-				<select name="status" required>
-					<option value="resolved">Разрешён</option>
-					<option value="rejected">Отклонён</option>
-					<option value="irrelevant">Не релевантен</option>
-				</select>
-				<textarea name="response"></textarea>
-				<button type="submit">Завершить обработку</button>
-			</form>
-		{{else if .Response}}
-			<p>{{.Response}}</p>
-		{{end}}
-		<hr/>
-	{{end}}
-</body>
-</html>`
+const operatorRequestsPage = `<!DOCTYPE html><html><head> <title>ЖКХ Пульс / Оператор / Обращения</title> <style> * { box-sizing: border-box; } body { margin: 0; font-family: Arial; } .main-root { display: flex; } .main-root__le { height: 100vh; width: 15%; border-right: 1px solid #CCCCCC; } .main-root__user { display: block; font-size: 14px; padding: 15px; box-shadow: -8px -2px 10px rgba(0, 0, 0, 0.2) } .main-root__link { position: relative; display: block; font-size: 15px; padding: 15px 0 15px 60px; color: #4D4D4E; text-decoration: none; } .main-root__link::before { content: ""; position: absolute; top: 50%; left: 20px; display: block; width: 20px; height: 19px; margin-top: -9.5px; background-image: url(https://svgshare.com/i/FDc.svg); } .main-root__link--active, .main-root__link:hover { color: #00B858; } .main-root__ri { width: 84%; } .main-root__content { padding-top: 1%; padding-left: 1%; } .main-root__title { display: block; padding: 15px; background-color: #00B858; color: #fff; } .main-root__wrap { display: flex; margin-bottom: 20px; } .main-root__wrap input { border: 1px solid #E0E0E0; font-size: 16px; padding: 10px 15px; margin-right: 10px; } .main-root__wrap button { cursor: pointer; border-radius: 3px; background-color: #EEEEEE; text-transform: uppercase; border: none; font-size: 14px; color: #1B1B1B; padding: 10px; } .main-root__wrap button:hover { background-color: #00B858; color: #fff; } .main-cell__select { padding: 10px 15px; margin-bottom: 10px; display: block; } .main-cell__text { display: block; border: none; border-bottom: 1px solid #ccc; margin-bottom: 10px; } .main-cell__text:focus { outline: none; } select, button { min-width: 300px; } .main-cell__text { min-width: 500px; min-height: 100px; } </style></head><body> <div class="main-root"> <div class="main-root__le"> <b class="main-root__user">{{.Login}}</b> <a class="main-root__link" href="/logout">Выход</a> </div> <div class="main-root__ri"> <b class="main-root__title">Обращения</b> <div class="main-root__content"> {{range .Requests}} <p><b>{{.ID}}</b>, <b>Статус: {{.Status}}</b>, Дата и время: {{.CreatedAt.Format "2006-01-02 15:04"}}</p> <p><b>Владелец:</b> Имя: {{.OwnerName}}, Телефон: {{.OwnerPhone}} Адрес: {{.OwnerAddress}}</p> <p>{{.Text}}</p> {{if .HasNewStatus}} <form method="POST" action="/operator/set-request-in-progress"> <div class="main-root__wrap"> <input type="hidden" name="id" value="{{.ID}}" /> <button type="submit">Начать обработку</button> </div> </form> {{else if .HasInProgressStatus}} <form method="POST" action="/operator/set-request-final"> <input type="hidden" name="id" value="{{.ID}}" /> <select class="main-cell__select" name="status" required> <option value="resolved">Разрешён</option> <option value="rejected">Отклонён</option> <option value="irrelevant">Не релевантен</option> </select> <textarea class="main-cell__text" name="response" placeholder="Комментарий"></textarea> <div class="main-root__wrap"> <button type="submit">Завершить обработку</button> </div> </form> {{else if .Response}} <p>{{.Response}}</p> {{end}} {{end}} </div> </div> </div></body></html>`
 
 func (s *Server) getOperatorRequests(c echo.Context) error {
 	sess, err := session.Get("session", c)
@@ -960,6 +922,16 @@ func (s *Server) getOperatorRequests(c echo.Context) error {
 	operatorID, ok := sess.Values["operator_id"].(int)
 	if !ok {
 		return errors.New("failed to get operator ID from session")
+	}
+
+	var statuses []string
+
+	for _, s := range strings.Split(c.QueryParam("statuses"), ",") {
+		statuses = append(statuses, s)
+	}
+
+	if len(statuses) == 0 {
+		statuses = []string{status.New, status.InProgress}
 	}
 
 	rs, err := s.storage.OperatorRequests(operatorID)
@@ -1063,34 +1035,7 @@ func (s *Server) getOwner(c echo.Context) error {
 	return c.Redirect(http.StatusFound, "/owner/requests")
 }
 
-// language=html
-const ownerRequestsPage = `<!DOCTYPE html>
-<html>
-<head>
-	<title>ЖКХ Пульс / Владелец / Обращения</title>
-</head>
-<body>
-	<h1>ЖКХ Пульс / Владелец / Обращения</h1>
-	<h2>{{.Login}}</h2>
-	<a href="/logout">Выход</a>
-	<hr/>
-	<form method="post" action="/owner/create-request">
-		<textarea name="text" placeholder="Текст обращения"></textarea>
-		<button type="submit">Отправить</button>
-	</form>
-	{{range .Requests}}
-		<hr/>
-		<p><b>{{.ID}}</b> , <b>Статус: {{.Status}}</b>, Дата и время: {{.CreatedAt.Format "2006-01-02 15:04"}}</p>
-		{{if .CategoryName}}
-			<p>Категория: {{.CategoryName}}</p>
-		{{end}}
-		<p>{{.Text}}</p>
-		{{if .Response}}
-			<p>{{.Response}}</p>
-		{{end}}
-	{{end}}
-</body>
-</html>`
+const ownerRequestsPage = `<!DOCTYPE html><html><head> <title>ЖКХ Пульс / Владелец / Обращения</title> <style> * { box-sizing: border-box; } body { margin: 0; font-family: Arial; } .main-root { display: flex; } .main-root__le { height: 100vh; width: 15%; border-right: 1px solid #CCCCCC; } .main-root__user { display: block; font-size: 14px; padding: 15px; box-shadow: -8px -2px 10px rgba(0, 0, 0, 0.2) } .main-root__link { position: relative; display: block; font-size: 15px; padding: 15px 0 15px 60px; color: #4D4D4E; text-decoration: none; } .main-root__link::before { content: ""; position: absolute; top: 50%; left: 20px; display: block; width: 20px; height: 19px; margin-top: -9.5px; background-image: url(https://svgshare.com/i/FDc.svg); } .main-root__link--active, .main-root__link:hover { color: #00B858; } .main-root__ri { width: 84%; } .main-root__content { padding-top: 1%; padding-left: 1%; } .main-root__title { display: block; padding: 15px; background-color: #00B858; color: #fff; } .main-root__wrap { display: flex; margin-bottom: 20px; } .main-root__wrap input { border: 1px solid #E0E0E0; font-size: 16px; padding: 10px 15px; margin-right: 10px; } .main-root__wrap button { cursor: pointer; border-radius: 3px; background-color: #EEEEEE; text-transform: uppercase; border: none; font-size: 14px; color: #1B1B1B; padding: 10px; } .main-root__wrap button:hover { background-color: #00B858; color: #fff; } .main-cell__select { padding: 10px 15px; margin-bottom: 10px; display: block; } .main-cell__text { display: block; border: none; border-bottom: 1px solid #ccc; margin-bottom: 10px; } .main-cell__text:focus { outline: none; } select, button { min-width: 300px; } .main-cell__text { min-width: 500px; min-height: 100px; } </style></head><body> <div class="main-root"> <div class="main-root__le"> <b class="main-root__user">{{.Login}}</b> <a class="main-root__link" href="/logout">Выход</a> </div> <div class="main-root__ri"> <b class="main-root__title">Владелец Обращения</b> <div class="main-root__content"> <form method="post" action="/owner/create-request"> <textarea name="text" placeholder="Текст обращения" class="main-cell__text"></textarea> <div class="main-root__wrap"> <button type="submit">Отправить</button> </div> </form> {{range .Requests}} <p><b>{{.ID}}</b> , <b>Статус: {{.Status}}</b>, Дата и время: {{.CreatedAt.Format "2006-01-02 15:04"}}</p> {{if .CategoryName}} <p>Категория: {{.CategoryName}}</p> {{end}} <p>{{.Text}}</p> {{if .Response}} <p>{{.Response}}</p> {{end}} {{end}} </div> </div> </div></body></html>`
 
 func (s *Server) getOwnerRequests(c echo.Context) error {
 	sess, err := session.Get("session", c)
