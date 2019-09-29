@@ -10,7 +10,7 @@ CREATE TABLE password_codes (
 CREATE TABLE admins (
     id BIGSERIAL PRIMARY KEY,
     email TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL
+    password_hash TEXT
 );
 
 CREATE TABLE categories (
@@ -37,7 +37,7 @@ CREATE TABLE operators (
     phone TEXT NOT NULL UNIQUE,
     password_hash TEXT,
     name TEXT NOT NULL,
-    responsible_categories TEXT[] NOT NULL
+    responsible_categories BIGINT[] NOT NULL
 );
 
 CREATE TABLE owners (
@@ -58,5 +58,5 @@ CREATE TABLE requests (
     text TEXT NOT NULL,
     response TEXT,
     status TEXT NOT NULL,
-    created_at TIME WITH TIME ZONE NOT NULL
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL
 );

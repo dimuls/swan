@@ -1,13 +1,16 @@
 package postgres
 
 import (
+	"database/sql"
 	"errors"
+	"math/rand"
 	"time"
 
 	"github.com/Boostport/migration"
 	"github.com/Boostport/migration/driver/postgres"
 	"github.com/gobuffalo/packr"
 	"github.com/jmoiron/sqlx"
+	"github.com/lib/pq"
 
 	"github.com/dimuls/swan/entity"
 )
@@ -61,11 +64,20 @@ func (s *Storage) PasswordCode(role string, login string) (
 	return
 }
 
+func (s *Storage) RemovePasswordCode(role string, login string) error {
+	_, err := s.db.Exec(`
+		DELETE FROM password_codes WHERE role = $1 AND login = $2
+	`, role, login)
+	return err
+}
+
 func (s *Storage) UpsertPasswordCode(pc entity.PasswordCode) error {
 	_, err := s.db.Exec(`
 		INSERT INTO password_codes (role, login, code, created_at)
 		VALUES ($1, $2, $3, $4)
-		ON CONFLICT DO UPDATE SET code = $3, created_at = $5
+		ON CONFLICT (role, login)
+		DO UPDATE SET
+			code = EXCLUDED.code, created_at = EXCLUDED.created_at
 	`, pc.Role, pc.Login, pc.Code, pc.CreatedAt)
 	return err
 }
@@ -185,54 +197,124 @@ func (s *Storage) SetOrganizationPasswordHash(organizationID int,
 }
 
 func (s *Storage) Operator(phone string) (o entity.Operator, err error) {
-	err = s.db.QueryRowx(`SELECT * FROM operators WHERE phone = $1`,
-		phone).StructScan(&o)
+	var rcs64 pq.Int64Array
+
+	err = s.db.QueryRow(`
+		SELECT id, organization_id, phone, password_hash, name,
+		       responsible_categories
+		FROM operators WHERE phone = $1
+	`, phone).Scan(&o.ID, &o.OrganizationID, &o.Phone, &o.PasswordHash,
+		&o.Name, &rcs64)
+	if err != nil {
+		return o, err
+	}
+
+	for _, rc := range rcs64 {
+		o.ResponsibleCategories = append(o.ResponsibleCategories, int(rc))
+	}
+
 	return
 }
 
 func (s *Storage) OrganizationOperators(organizationID int) (
-	os []entity.Operator, err error) {
-	err = s.db.Select(&os, `
-		SELECT * FROM operators WHERE organization_id = $1
+	[]entity.Operator, error) {
+
+	rows, err := s.db.Query(`
+		SELECT id, organization_id, phone, password_hash, name,
+		       responsible_categories
+		FROM operators WHERE organization_id = $1
 	`, organizationID)
-	return
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var os []entity.Operator
+
+	for rows.Next() {
+		var o entity.Operator
+		var rcs64 pq.Int64Array
+
+		err = rows.Scan(&o.ID, &o.OrganizationID, &o.Phone, &o.PasswordHash,
+			&o.Name, &rcs64)
+
+		for _, rc := range rcs64 {
+			o.ResponsibleCategories = append(o.ResponsibleCategories, int(rc))
+		}
+
+		os = append(os, o)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return os, nil
 }
 
 func (s *Storage) AddOperator(o entity.Operator) (entity.Operator, error) {
 	err := s.db.QueryRowx(`
-		INSERT INTO operators (organization_id, phone, password_hash, name,
+		INSERT INTO operators (organization_id, phone, name, 
 			responsible_categories)
-		VALUES ($1, $2, $3, $4, $5)
+		VALUES ($1, $2, $3, $4)
 		RETURNING id
-	`).Scan(&o.ID)
+	`, o.OrganizationID, o.Phone, o.Name, pq.Array(o.ResponsibleCategories)).
+		Scan(&o.ID)
 	return o, err
 }
 
 func (s *Storage) SetOperator(o entity.Operator) (entity.Operator, error) {
 	_, err := s.db.Exec(`
-		UPDATE operators SET phone = $1, password_hash = $2, name = $3,
-			responsible_categories = $4
-		WHERE id = $5
-	`, o.Phone, o.PasswordHash, o.Name, o.ResponsibleCategories, o.ID)
+		UPDATE operators SET phone = $1, name = $2, responsible_categories = $3
+		WHERE id = $4
+	`, o.Phone, o.Name, pq.Array(o.ResponsibleCategories), o.ID)
 	return o, err
 }
 
 func (s *Storage) RemoveOrganizationOperator(
 	organizationID int, operatorID int) error {
 	_, err := s.db.Exec(`
-		DELETE FROM organizations
-		WHERE organization_id = $1 AND operator_id = $2
+		DELETE FROM operators
+		WHERE organization_id = $1 AND id = $2
 	`, organizationID, operatorID)
 	return err
 }
 
 func (s *Storage) FindOrganizationOperator(organizationID, categoryID int) (
 	o entity.Operator, err error) {
-	err = s.db.QueryRowx(`
+
+	rows, err := s.db.Query(`
 		SELECT * FROM operators WHERE organization_id = $1
 			AND $2 = ANY(responsible_categories)
-	`, organizationID, categoryID).StructScan(&o)
-	return
+	`, organizationID, categoryID)
+	if err != nil {
+		return o, err
+	}
+	defer rows.Close()
+
+	var os []entity.Operator
+
+	for rows.Next() {
+		var o entity.Operator
+		var rcs64 pq.Int64Array
+
+		err = rows.Scan(&o.ID, &o.OrganizationID, &o.Phone, &o.PasswordHash,
+			&o.Name, &rcs64)
+
+		for _, rc := range rcs64 {
+			o.ResponsibleCategories = append(o.ResponsibleCategories, int(rc))
+		}
+
+		os = append(os, o)
+		if err != nil {
+			return o, err
+		}
+	}
+
+	if len(os) == 0 {
+		return o, sql.ErrNoRows
+	}
+
+	return os[rand.Intn(len(os))], nil
 }
 
 func (s *Storage) SetOperatorPasswordHash(operatorID int,
@@ -262,7 +344,7 @@ func (s *Storage) AddOwner(o entity.Owner) (entity.Owner, error) {
 			(organization_id, phone, password_hash, name, address)
 		VALUES ($1, $2, $3, $4, $5)
 		RETURNING id
-	`).Scan(&o.ID)
+	`, o.OrganizationID, o.Phone, o.PasswordHash, o.Name, o.Address).Scan(&o.ID)
 	return o, err
 }
 
@@ -290,10 +372,39 @@ func (s *Storage) SetOwnerPasswordHash(ownerID int,
 	return err
 }
 
+func (s *Storage) OperatorRequest(operatorID int, requestID int) (
+	r entity.Request, err error) {
+	err = s.db.QueryRowx(`
+		SELECT * FROM requests WHERE operator_id = $1 AND id = $2
+	`, operatorID, requestID).StructScan(&r)
+	return
+}
+
 func (s *Storage) OperatorRequests(operatorID int) (
-	rs []entity.Request, err error) {
+	rs []entity.RequestExtended, err error) {
 	err = s.db.Select(&rs, `
-		SELECT * FROM requests WHERE operator_id = $1
+		SELECT
+			r.id as id,
+			r.organization_id as organization_id,
+			r.owner_id as owner_id,
+			r.operator_id as operator_id,
+			r.category_id as category_id,
+			r.text as text,
+			r.response as response,
+			r.status as status,
+			r.created_at as created_at,
+			c.name as category_name,
+			op.phone as operator_phone,
+		    op.name as operator_name,
+			ow.phone as owner_phone,
+			ow.name as owner_name,
+			ow.address as owner_address
+		FROM requests as r
+		LEFT JOIN categories as c ON r.category_id = c.id
+		LEFT JOIN operators as op ON r.operator_id = op.id
+		LEFT JOIN owners as ow ON r.owner_id = ow.id 
+		WHERE operator_id = $1
+		ORDER BY created_at DESC
 	`, operatorID)
 	return
 }
@@ -301,22 +412,44 @@ func (s *Storage) OperatorRequests(operatorID int) (
 func (s *Storage) SetOperatorRequest(operatorID int, r entity.Request) (
 	entity.Request, error) {
 	_, err := s.db.Exec(`
-		UPDATE requests SET category_id = $1, response = $2, status = $3
-		WHERE operator_id = $4 AND id = $5
-	`, r.CategoryID, r.Response, r.Status, operatorID, r.ID)
+		UPDATE requests SET response = $1, status = $2
+		WHERE operator_id = $3 AND id = $4
+	`, r.Response, r.Status, operatorID, r.ID)
 	return r, err
 }
 
-func (s *Storage) OwnerRequests(ownerID int) (rs []entity.Request, err error) {
+func (s *Storage) OwnerRequests(ownerID int) (rs []entity.RequestExtended,
+	err error) {
 	err = s.db.Select(&rs, `
-		SELECT * FROM requests WHERE owner_id = $1
+		SELECT
+			r.id as id,
+			r.organization_id as organization_id,
+			r.owner_id as owner_id,
+			r.operator_id as operator_id,
+			r.category_id as category_id,
+			r.text as text,
+			r.response as response,
+			r.status as status,
+			r.created_at as created_at,
+			c.name as category_name,
+			op.phone as operator_phone,
+		    op.name as operator_name,
+			ow.phone as owner_phone,
+			ow.name as owner_name,
+			ow.address as owner_address
+		FROM requests as r
+		LEFT JOIN categories as c ON r.category_id = c.id
+		LEFT JOIN operators as op ON r.operator_id = op.id
+		LEFT JOIN owners as ow ON r.owner_id = ow.id
+		WHERE owner_id = $1
+		ORDER BY created_at DESC
 	`, ownerID)
 	return
 }
 
 func (s *Storage) AddRequest(r entity.Request) (entity.Request, error) {
 	err := s.db.QueryRowx(`
-		INSERT INTO request 
+		INSERT INTO requests
 			(organization_id, owner_id, operator_id, category_id, text, 
 				status, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)

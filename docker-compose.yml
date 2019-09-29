@@ -40,6 +40,6 @@ services:
       CLASSIFIER_API_URI: "http://classifier"
       WEB_SERVER_BIND_ADDR: ":80"
       WEB_SERVER_DEBUG: "1"
-    depends_on:
-      - classifier
-      - swan-db
+#    depends_on:
+#      - classifier
+#      - swan-db

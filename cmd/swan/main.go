@@ -21,7 +21,10 @@ func main() {
 		logrus.WithError(err).Fatal("failed to create swan service")
 	}
 
-	service.Start()
+	err = service.Start()
+	if err != nil {
+		logrus.WithError(err).Error("failed to start service")
+	}
 
 	ss := make(chan os.Signal)
 	signal.Notify(ss, os.Interrupt, syscall.SIGTERM)

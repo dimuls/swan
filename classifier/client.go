@@ -103,8 +103,8 @@ func (c *Client) Classify(text string) (int, error) {
 
 	defer res.Body.Close()
 
-	if res.StatusCode != http.StatusAccepted {
-		return 0, errors.New("not accepted status code")
+	if res.StatusCode != http.StatusOK {
+		return 0, errors.New("not OK status code")
 	}
 
 	var class string

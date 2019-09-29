@@ -43,8 +43,8 @@ func NewService(
 	}, nil
 }
 
-func (s *Service) Start() {
-	s.webServer.Start()
+func (s *Service) Start() error {
+	return s.webServer.Start()
 }
 
 func (s *Service) Stop() {

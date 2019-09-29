@@ -30,7 +30,7 @@ func (ld loginData) Validate() error {
 	return nil
 }
 
-func (s *Server) postLogin(c echo.Context) error {
+func (s *Server) postAPILogin(c echo.Context) error {
 	sess, err := session.Get("session", c)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest,
@@ -69,14 +69,19 @@ func (s *Server) postLogin(c echo.Context) error {
 
 	switch et := e.(type) {
 	case entity.Admin:
+		if et.PasswordHash == nil {
+			return echo.NewHTTPError(http.StatusFound,
+				"password reset required")
+		}
+
 		if bcrypt.CompareHashAndPassword(et.PasswordHash,
 			[]byte(ld.Password)) != nil {
 			return echo.NewHTTPError(http.StatusUnauthorized)
 		}
 
 		sess.Values["role"] = role.Admin
+		sess.Values["login"] = et.Email
 		sess.Values["admin_id"] = et.ID
-		sess.Values["entity"] = et
 
 	case entity.Organization:
 		if et.PasswordHash == nil {
@@ -90,8 +95,8 @@ func (s *Server) postLogin(c echo.Context) error {
 		}
 
 		sess.Values["role"] = role.Organization
+		sess.Values["login"] = et.Email
 		sess.Values["organization_id"] = et.ID
-		sess.Values["entity"] = et
 
 	case entity.Operator:
 		if et.PasswordHash == nil {
@@ -105,8 +110,8 @@ func (s *Server) postLogin(c echo.Context) error {
 		}
 
 		sess.Values["role"] = role.Operator
+		sess.Values["login"] = et.Phone
 		sess.Values["operator_id"] = et.ID
-		sess.Values["entity"] = et
 
 	case entity.Owner:
 		if et.PasswordHash == nil {
@@ -120,9 +125,9 @@ func (s *Server) postLogin(c echo.Context) error {
 		}
 
 		sess.Values["role"] = role.Owner
+		sess.Values["login"] = et.Phone
 		sess.Values["owner_id"] = et.ID
 		sess.Values["organization_id"] = et.OrganizationID
-		sess.Values["entity"] = et
 	}
 
 	err = sess.Save(c.Request(), c.Response())
@@ -138,7 +143,7 @@ func generatePasswordCode() string {
 	return "4242"
 }
 
-func (s *Server) postPasswordCode(c echo.Context) error {
+func (s *Server) postAPIPasswordCode(c echo.Context) error {
 	var passwordCodeData struct {
 		Role  string
 		Login string
@@ -202,7 +207,7 @@ func (s *Server) postPasswordCode(c echo.Context) error {
 	return c.NoContent(http.StatusOK)
 }
 
-func (s *Server) postPassword(c echo.Context) error {
+func (s *Server) postAPIPassword(c echo.Context) error {
 	var passwordData struct {
 		Role     string
 		Login    string
@@ -271,6 +276,21 @@ func (s *Server) postPassword(c echo.Context) error {
 
 	switch et := e.(type) {
 	case entity.Admin:
+		err = s.storage.RemovePasswordCode(role.Admin, et.Email)
+	case entity.Organization:
+		err = s.storage.RemovePasswordCode(role.Organization, et.Email)
+	case entity.Operator:
+		err = s.storage.RemovePasswordCode(role.Operator, et.Phone)
+	case entity.Owner:
+		err = s.storage.RemovePasswordCode(role.Owner, et.Phone)
+	}
+	if err != nil {
+		return errors.New("failed to remove password code from storage: " +
+			err.Error())
+	}
+
+	switch et := e.(type) {
+	case entity.Admin:
 		err = s.storage.SetAdminPasswordHash(et.ID, passwordHash)
 	case entity.Organization:
 		err = s.storage.SetOrganizationPasswordHash(et.ID, passwordHash)
@@ -287,7 +307,43 @@ func (s *Server) postPassword(c echo.Context) error {
 	return c.NoContent(http.StatusOK)
 }
 
-func (s *Server) getCategories(c echo.Context) error {
+func (s *Server) getAPIEntity(c echo.Context) error {
+	sess, err := session.Get("session", c)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest,
+			"failed to get session")
+	}
+
+	r, ok := sess.Values["role"].(string)
+	if !ok {
+		return errors.New("failed to get role from session")
+	}
+
+	login, ok := sess.Values["login"].(string)
+	if !ok {
+		return errors.New("failed to get login from session")
+	}
+
+	var e interface{}
+
+	switch r {
+	case role.Admin:
+		e, err = s.storage.Admin(login)
+	case role.Organization:
+		e, err = s.storage.Organization(login)
+	case role.Operator:
+		e, err = s.storage.Operator(login)
+	case role.Owner:
+		e, err = s.storage.Owner(login)
+	}
+	if err != nil {
+		return errors.New("failed to get entity from storage: " + err.Error())
+	}
+
+	return c.JSON(http.StatusOK, e)
+}
+
+func (s *Server) getAPICategories(c echo.Context) error {
 	cs, err := s.storage.Categories()
 	if err != nil {
 		return errors.New("failed to get categories from storage: " +
@@ -301,7 +357,7 @@ func (s *Server) getCategories(c echo.Context) error {
 	return c.JSON(http.StatusOK, cs)
 }
 
-func (s *Server) postCategories(c echo.Context) error {
+func (s *Server) postAPICategories(c echo.Context) error {
 	var ct entity.Category
 
 	err := c.Bind(&ct)
@@ -324,7 +380,7 @@ func (s *Server) postCategories(c echo.Context) error {
 	return c.JSON(http.StatusOK, ct)
 }
 
-func (s *Server) putCategory(c echo.Context) error {
+func (s *Server) putAPICategory(c echo.Context) error {
 	categoryID, err := strconv.Atoi(c.Param("category_id"))
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest,
@@ -355,7 +411,7 @@ func (s *Server) putCategory(c echo.Context) error {
 	return c.JSON(http.StatusOK, ct)
 }
 
-func (s *Server) deleteCategory(c echo.Context) error {
+func (s *Server) deleteAPICategory(c echo.Context) error {
 	categoryID, err := strconv.Atoi(c.Param("category_id"))
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest,
@@ -371,7 +427,7 @@ func (s *Server) deleteCategory(c echo.Context) error {
 	return c.NoContent(http.StatusOK)
 }
 
-func (s *Server) postCategorySamples(c echo.Context) error {
+func (s *Server) postAPICategorySamples(c echo.Context) error {
 	var samples []entity.CategorySample
 
 	err := c.Bind(&samples)
@@ -396,7 +452,7 @@ func (s *Server) postCategorySamples(c echo.Context) error {
 	return c.NoContent(http.StatusOK)
 }
 
-func (s *Server) postCategorySamplesClassifier(c echo.Context) error {
+func (s *Server) postAPICategorySamplesClassifier(c echo.Context) error {
 	samples, err := s.storage.CategorySamples()
 	if err != nil {
 		return errors.New("failed to get category samples from storage: " +
@@ -411,7 +467,7 @@ func (s *Server) postCategorySamplesClassifier(c echo.Context) error {
 	return c.NoContent(http.StatusOK)
 }
 
-func (s *Server) getCategorySamplesClassifierTraining(c echo.Context) error {
+func (s *Server) getAPICategorySamplesClassifierTraining(c echo.Context) error {
 	training, err := s.classifier.Training()
 	if err != nil {
 		return errors.New("failed to get training from classifier: " +
@@ -421,7 +477,7 @@ func (s *Server) getCategorySamplesClassifierTraining(c echo.Context) error {
 	return c.JSON(http.StatusOK, training)
 }
 
-func (s *Server) getOrganizations(c echo.Context) error {
+func (s *Server) getAPIOrganizations(c echo.Context) error {
 	os, err := s.storage.Organizations()
 	if err != nil {
 		return errors.New("failed to get organizations from storage: " +
@@ -435,7 +491,7 @@ func (s *Server) getOrganizations(c echo.Context) error {
 	return c.JSON(http.StatusOK, os)
 }
 
-func (s *Server) postOrganizations(c echo.Context) error {
+func (s *Server) postAPIOrganizations(c echo.Context) error {
 	var o entity.Organization
 
 	err := c.Bind(&o)
@@ -458,7 +514,7 @@ func (s *Server) postOrganizations(c echo.Context) error {
 	return c.JSON(http.StatusOK, o)
 }
 
-func (s *Server) putOrganization(c echo.Context) error {
+func (s *Server) putAPIOrganization(c echo.Context) error {
 	organizationID, err := strconv.Atoi(c.Param("organization_id"))
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest,
@@ -489,7 +545,7 @@ func (s *Server) putOrganization(c echo.Context) error {
 	return c.JSON(http.StatusOK, o)
 }
 
-func (s *Server) deleteOrganization(c echo.Context) error {
+func (s *Server) deleteAPIOrganization(c echo.Context) error {
 	organizationID, err := strconv.Atoi(c.Param("organization_id"))
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest,
@@ -505,7 +561,7 @@ func (s *Server) deleteOrganization(c echo.Context) error {
 	return c.NoContent(http.StatusOK)
 }
 
-func (s *Server) getOperators(c echo.Context) error {
+func (s *Server) getAPIOperators(c echo.Context) error {
 	sess, err := session.Get("session", c)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest,
@@ -526,7 +582,7 @@ func (s *Server) getOperators(c echo.Context) error {
 	return c.JSON(http.StatusOK, os)
 }
 
-func (s *Server) postOperators(c echo.Context) error {
+func (s *Server) postAPIOperators(c echo.Context) error {
 	sess, err := session.Get("session", c)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest,
@@ -562,7 +618,7 @@ func (s *Server) postOperators(c echo.Context) error {
 	return c.JSON(http.StatusOK, o)
 }
 
-func (s *Server) putOperator(c echo.Context) error {
+func (s *Server) putAPIOperator(c echo.Context) error {
 	sess, err := session.Get("session", c)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest,
@@ -605,7 +661,7 @@ func (s *Server) putOperator(c echo.Context) error {
 	return c.JSON(http.StatusOK, o)
 }
 
-func (s *Server) deleteOperator(c echo.Context) error {
+func (s *Server) deleteAPIOperator(c echo.Context) error {
 	sess, err := session.Get("session", c)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest,
@@ -632,7 +688,7 @@ func (s *Server) deleteOperator(c echo.Context) error {
 	return c.NoContent(http.StatusOK)
 }
 
-func (s *Server) getOwners(c echo.Context) error {
+func (s *Server) getAPIOwners(c echo.Context) error {
 	sess, err := session.Get("session", c)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest,
@@ -653,7 +709,7 @@ func (s *Server) getOwners(c echo.Context) error {
 	return c.JSON(http.StatusOK, os)
 }
 
-func (s *Server) postOwners(c echo.Context) error {
+func (s *Server) postAPIOwners(c echo.Context) error {
 	sess, err := session.Get("session", c)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest,
@@ -689,7 +745,7 @@ func (s *Server) postOwners(c echo.Context) error {
 	return c.JSON(http.StatusOK, o)
 }
 
-func (s *Server) putOwner(c echo.Context) error {
+func (s *Server) putAPIOwner(c echo.Context) error {
 	sess, err := session.Get("session", c)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest,
@@ -732,7 +788,7 @@ func (s *Server) putOwner(c echo.Context) error {
 	return c.JSON(http.StatusOK, o)
 }
 
-func (s *Server) deleteOwner(c echo.Context) error {
+func (s *Server) deleteAPIOwner(c echo.Context) error {
 	sess, err := session.Get("session", c)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest,
@@ -759,7 +815,7 @@ func (s *Server) deleteOwner(c echo.Context) error {
 	return c.NoContent(http.StatusOK)
 }
 
-func (s *Server) getOperatorsRequests(c echo.Context) error {
+func (s *Server) getAPIOperatorsRequests(c echo.Context) error {
 	sess, err := session.Get("session", c)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest,
@@ -780,7 +836,7 @@ func (s *Server) getOperatorsRequests(c echo.Context) error {
 	return c.JSON(http.StatusOK, rs)
 }
 
-func (s *Server) putOperatorsRequest(c echo.Context) error {
+func (s *Server) putAPIOperatorsRequest(c echo.Context) error {
 	sess, err := session.Get("session", c)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest,
@@ -815,7 +871,7 @@ func (s *Server) putOperatorsRequest(c echo.Context) error {
 	return c.JSON(http.StatusOK, r)
 }
 
-func (s *Server) getOwnersRequests(c echo.Context) error {
+func (s *Server) getAPIOwnersRequests(c echo.Context) error {
 	sess, err := session.Get("session", c)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest,
@@ -835,7 +891,7 @@ func (s *Server) getOwnersRequests(c echo.Context) error {
 	return c.JSON(http.StatusOK, rs)
 }
 
-func (s *Server) postOwnersRequests(c echo.Context) error {
+func (s *Server) postAPIOwnersRequests(c echo.Context) error {
 	sess, err := session.Get("session", c)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest,

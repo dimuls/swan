@@ -1,6 +1,10 @@
 package entity
 
-import "time"
+import (
+	"time"
+
+	"github.com/dimuls/swan/entity/status"
+)
 
 type PasswordCode struct {
 	Role      string    `db:"role"`
@@ -16,8 +20,8 @@ type Admin struct {
 }
 
 type Category struct {
-	ID   int    `db:"id" json:"id"`
-	Name string `db:"name" json:"name"`
+	ID   int    `db:"id" json:"id" form:"id"`
+	Name string `db:"name" json:"name" form:"name"`
 }
 
 func (c Category) Validate() error {
@@ -36,11 +40,11 @@ func (cs CategorySample) Validate() error {
 }
 
 type Organization struct {
-	ID           int    `db:"id" json:"id"`
-	Name         string `db:"name" json:"name"`
-	Email        string `db:"email" json:"email"`
-	FlatsCount   int    `db:"flats_count" json:"flats_count"`
-	PasswordHash []byte `db:"password_hash" json:"-"`
+	ID           int    `db:"id" json:"id" form:"id"`
+	Name         string `db:"name" json:"name" form:"name"`
+	Email        string `db:"email" json:"email" form:"email"`
+	FlatsCount   int    `db:"flats_count" json:"flats_count" form:"flats_count"`
+	PasswordHash []byte `db:"password_hash" json:"-" form:"-"`
 }
 
 func (o Organization) Validate() error {
@@ -49,12 +53,13 @@ func (o Organization) Validate() error {
 }
 
 type Operator struct {
-	ID                    int      `db:"id" json:"id"`
-	OrganizationID        int      `db:"organization_id" json:"organization_id"`
-	Phone                 string   `db:"phone" json:"phone"`
-	PasswordHash          []byte   `db:"password_hash" json:"-"`
-	Name                  string   `db:"name" json:"name"`
-	ResponsibleCategories []string `db:"responsible_categories" json:"responsible_categories"`
+	ID                       int    `db:"id" json:"id" form:"id"`
+	OrganizationID           int    `db:"organization_id" json:"organization_id" form:"organization_id"`
+	Phone                    string `db:"phone" json:"phone" form:"phone"`
+	PasswordHash             []byte `db:"password_hash" json:"-" form:"-"`
+	Name                     string `db:"name" json:"name" form:"name"`
+	ResponsibleCategoriesStr string `db:"-" json:"-" form:"responsible_categories"`
+	ResponsibleCategories    []int  `db:"responsible_categories" json:"responsible_categories" form:"-"`
 }
 
 func (o Operator) Validate() error {
@@ -63,12 +68,12 @@ func (o Operator) Validate() error {
 }
 
 type Owner struct {
-	ID             int    `db:"id" json:"id"`
-	OrganizationID int    `db:"organization_id" json:"organization_id"`
-	Phone          string `db:"phone" json:"phone"`
-	PasswordHash   []byte `db:"password_hash" json:"-"`
-	Name           string `db:"name" json:"name"`
-	Address        string `db:"address" json:"address"`
+	ID             int    `db:"id" json:"id" form:"id"`
+	OrganizationID int    `db:"organization_id" json:"organization_id" form:"organization_id"`
+	Phone          string `db:"phone" json:"phone" form:"phone"`
+	PasswordHash   []byte `db:"password_hash" json:"-" form:"-"`
+	Name           string `db:"name" json:"name" form:"name"`
+	Address        string `db:"address" json:"address" form:"address"`
 }
 
 func (u Owner) Validate() error {
@@ -77,18 +82,39 @@ func (u Owner) Validate() error {
 }
 
 type Request struct {
-	ID             int       `db:"id" json:"id"`
-	OrganizationID int       `db:"organization_id" json:"organization_id"`
-	OwnerID        int       `db:"owner_id" json:"owner_id"`
-	OperatorID     *int      `db:"operator_id" json:"operator_id"`
-	CategoryID     *int      `db:"category_id" json:"category_id"`
-	Text           string    `db:"text" json:"text"`
-	Response       *string   `db:"response" json:"response"`
-	Status         string    `db:"status" json:"status"`
-	CreatedAt      time.Time `db:"created_at" json:"created_at"`
+	ID             int       `db:"id" json:"id" form:"id"`
+	OrganizationID int       `db:"organization_id" json:"organization_id" form:"-"`
+	OwnerID        int       `db:"owner_id" json:"owner_id" form:"-"`
+	OperatorID     *int      `db:"operator_id" json:"operator_id" form:"-"`
+	CategoryID     *int      `db:"category_id" json:"category_id" form:"-"`
+	Text           string    `db:"text" json:"text" form:"text"`
+	Response       *string   `db:"response" json:"response" form:"response"`
+	Status         string    `db:"status" json:"status" form:"status"`
+	CreatedAt      time.Time `db:"created_at" json:"created_at" form:"-"`
+}
+
+type RequestExtended struct {
+	Request `db:",inline"`
+
+	CategoryName *string `db:"category_name"`
+
+	OperatorPhone *string `db:"operator_phone"`
+	OperatorName  *string `db:"operator_name"`
+
+	OwnerPhone   *string `db:"owner_phone"`
+	OwnerName    *string `db:"owner_name"`
+	OwnerAddress *string `db:"owner_address"`
 }
 
 func (r Request) Validate() error {
 	// TODO: validate request
 	return nil
+}
+
+func (r Request) HasNewStatus() bool {
+	return r.Status == status.New
+}
+
+func (r Request) HasInProgressStatus() bool {
+	return r.Status == status.InProgress
 }

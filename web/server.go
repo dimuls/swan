@@ -21,6 +21,7 @@ import (
 
 type Storage interface {
 	PasswordCode(role string, login string) (entity.PasswordCode, error)
+	RemovePasswordCode(role string, login string) error
 	UpsertPasswordCode(entity.PasswordCode) error
 
 	Admin(email string) (entity.Admin, error)
@@ -57,10 +58,11 @@ type Storage interface {
 	RemoveOrganizationOwner(organizationID int, ownerID int) error
 	SetOwnerPasswordHash(ownerID int, passwordHash []byte) error
 
-	OperatorRequests(operatorID int) ([]entity.Request, error)
+	OperatorRequest(operatorID int, requestID int) (entity.Request, error)
+	OperatorRequests(operatorID int) ([]entity.RequestExtended, error)
 	SetOperatorRequest(operatorID int, r entity.Request) (entity.Request, error)
 
-	OwnerRequests(ownerID int) ([]entity.Request, error)
+	OwnerRequests(ownerID int) ([]entity.RequestExtended, error)
 	AddRequest(entity.Request) (entity.Request, error)
 }
 
@@ -108,13 +110,30 @@ func NewServer(bindAddr string, s Storage, ss SMSSender, es EmailSender,
 	}
 }
 
-func (s *Server) Start() {
+func (s *Server) Start() error {
 	e := echo.New()
 
 	e.Debug = s.debug
 
 	e.HideBanner = true
 	e.HidePort = true
+
+	var err error
+
+	e.Renderer, err = initRenderer(map[string]string{
+		"login":                  loginPage,
+		"register":               registerPage,
+		"password":               passwordPage,
+		"admin_organizations":    adminOrganizationsPage,
+		"admin_classifier":       adminClassifierPage,
+		"organization_owners":    organizationOwnersPage,
+		"organization_operators": organizationOperatorsPage,
+		"operator_requests":      operatorRequestsPage,
+		"owner_requests":         ownerRequestsPage,
+	})
+	if err != nil {
+		return errors.New("failed to init renderer: " + err.Error())
+	}
 
 	e.Use(middleware.Recover())
 	e.Use(logrusLogger)
@@ -157,54 +176,122 @@ func (s *Server) Start() {
 		}
 	}
 
+	// Statis pages
+
+	e.GET("", s.getIndex)
+
+	e.GET("/login", s.getLogin)
 	e.POST("/login", s.postLogin)
 
-	e.POST("/password-code", s.postPasswordCode)
+	e.GET("/logout", s.getLogout)
+
+	e.GET("/register", s.getRegister)
+	e.POST("/register", s.postRegister)
+
+	e.GET("/password", s.getPassword)
 	e.POST("/password", s.postPassword)
 
-	e.GET("/categories", s.getCategories,
+	admin := e.Group("/admin", forRoles(role.Admin))
+
+	admin.GET("", s.getAdmin)
+
+	admin.GET("/organizations", s.getAdminOrganizations)
+
+	admin.POST("/create-organization", s.postAdminCreateOrganization)
+	admin.POST("/set-organization", s.postAdminSetOrganization)
+	admin.POST("/remove-organization", s.postAdminRemoveOrganization)
+
+	admin.GET("/classifier", s.getAdminClassifier)
+	admin.POST("/classifier/create-category", s.postAdminCreateCategory)
+	admin.POST("/classifier/set-category", s.postAdminSetCategory)
+	admin.POST("/classifier/remove-category", s.postAdminRemoveCategory)
+
+	admin.POST("/classifier/train", s.postClassifierTrain)
+
+	org := e.Group("/organization", forRoles(role.Organization))
+
+	org.GET("", s.getOrganization)
+
+	org.GET("/owners", s.getOrganizationOwners)
+	org.POST("/create-owner", s.postOrganizationCreateOwner)
+	org.POST("/set-owner", s.postOrganizationSetOwner)
+	org.POST("/remove-owner", s.postOrganizationRemoveOwner)
+
+	org.GET("/operators", s.getOrganizationOperators)
+	org.POST("/create-operator", s.postOrganizationCreateOperator)
+	org.POST("/set-operator", s.postOrganizationSetOperator)
+	org.POST("/remove-operator", s.postOrganizationRemoveOperator)
+
+	oper := e.Group("/operator", forRoles(role.Operator))
+
+	oper.GET("", s.getOperator)
+
+	oper.GET("/requests", s.getOperatorRequests)
+	oper.POST("/set-request-in-progress", s.postSetRequestInProgress)
+	oper.POST("/set-request-final", s.postSetRequestFinal)
+
+	own := e.Group("/owner", forRoles(role.Owner))
+
+	own.GET("", s.getOwner)
+
+	own.GET("/requests", s.getOwnerRequests)
+	own.POST("/create-request", s.postOwnerCreateRequest)
+
+	// API
+
+	api := e.Group("/api")
+
+	api.POST("/login", s.postAPILogin)
+
+	api.POST("/password-code", s.postAPIPasswordCode)
+	api.POST("/password", s.postAPIPassword)
+
+	api.GET("/entity", s.getAPIEntity, forRoles(role.Admin, role.Organization,
+		role.Operator, role.Owner))
+
+	api.GET("/categories", s.getAPICategories,
 		forRoles(role.Organization, role.Operator))
 
-	categories := e.Group("/categories",
+	categories := api.Group("/categories",
 		forRoles(role.Admin))
-	categories.POST("/", s.postCategories)
-	categories.PUT("/:category_id", s.putCategory)
-	categories.DELETE("/:category_id", s.deleteCategory)
+	categories.POST("", s.postAPICategories)
+	categories.PUT("/:category_id", s.putAPICategory)
+	categories.DELETE("/:category_id", s.deleteAPICategory)
 
-	categorySamples := e.Group("/category-samples",
+	categorySamples := api.Group("/category-samples",
 		forRoles(role.Admin))
-	categorySamples.POST("/", s.postCategorySamples)
-	categorySamples.POST("/classifier", s.postCategorySamplesClassifier)
+	categorySamples.POST("", s.postAPICategorySamples)
+	categorySamples.POST("/classifier", s.postAPICategorySamplesClassifier)
 	categorySamples.GET("/classifier/training",
-		s.getCategorySamplesClassifierTraining)
+		s.getAPICategorySamplesClassifierTraining)
 
-	organizations := e.Group("/organizations", forRoles(role.Admin))
-	organizations.GET("/", s.getOrganizations)
-	organizations.POST("/", s.postOrganizations)
-	organizations.PUT("/:organization_id", s.putOrganization)
-	organizations.DELETE("/:organization_id", s.deleteOrganization)
+	organizations := api.Group("/organizations", forRoles(role.Admin))
+	organizations.GET("", s.getAPIOrganizations)
+	organizations.POST("", s.postAPIOrganizations)
+	organizations.PUT("/:organization_id", s.putAPIOrganization)
+	organizations.DELETE("/:organization_id", s.deleteAPIOrganization)
 
-	operators := e.Group("/operators", forRoles(role.Organization))
-	operators.GET("/", s.getOperators)
-	operators.POST("/", s.postOperators)
-	operators.PUT("/:operator_id", s.putOperator)
-	operators.DELETE("/:operator_id", s.deleteOperator)
+	operators := api.Group("/operators", forRoles(role.Organization))
+	operators.GET("", s.getAPIOperators)
+	operators.POST("", s.postAPIOperators)
+	operators.PUT("/:operator_id", s.putAPIOperator)
+	operators.DELETE("/:operator_id", s.deleteAPIOperator)
 
-	owners := e.Group("/owners", forRoles(role.Organization))
-	owners.GET("/", s.getOwners)
-	owners.POST("/", s.postOwners)
-	owners.PUT("/:owner_id", s.putOwner)
-	owners.DELETE("/:owner_id", s.deleteOwner)
+	owners := api.Group("/owners", forRoles(role.Organization))
+	owners.GET("", s.getAPIOwners)
+	owners.POST("", s.postAPIOwners)
+	owners.PUT("/:owner_id", s.putAPIOwner)
+	owners.DELETE("/:owner_id", s.deleteAPIOwner)
 
-	operatorRequests := e.Group("/operators/requests",
+	operatorRequests := api.Group("/operators/requests",
 		forRoles(role.Operator))
-	operatorRequests.GET("/", s.getOperatorsRequests)
-	operatorRequests.PUT("/:request_id", s.putOperatorsRequest)
+	operatorRequests.GET("", s.getAPIOperatorsRequests)
+	operatorRequests.PUT("/:request_id", s.putAPIOperatorsRequest)
 
-	ownerRequests := e.Group("/owners/requests",
+	ownerRequests := api.Group("/owners/requests",
 		forRoles(role.Owner))
-	ownerRequests.GET("/", s.getOwnersRequests)
-	ownerRequests.POST("/", s.postOwnersRequests)
+	ownerRequests.GET("", s.getAPIOwnersRequests)
+	ownerRequests.POST("", s.postAPIOwnersRequests)
 
 	s.echo = e
 
@@ -216,6 +303,8 @@ func (s *Server) Start() {
 			s.log.WithError(err).Error("failed to start")
 		}
 	}()
+
+	return nil
 }
 
 func (s *Server) Stop() {
@@ -282,7 +371,7 @@ func logrusLogger(next echo.HandlerFunc) echo.HandlerFunc {
 
 		p := req.URL.Path
 		if p == "" {
-			p = "/"
+			p = ""
 		}
 
 		bytesIn := req.Header.Get(echo.HeaderContentLength)
